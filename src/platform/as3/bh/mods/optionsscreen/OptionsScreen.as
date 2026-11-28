@@ -5,6 +5,7 @@ package bh.mods.optionsscreen
    import bh.platform.Moderation;
    import bh.platform.ModerationWindow;
    import bh.platform.CloudSave;
+   import bh.platform.ContentMods;
    import bh.platform.SaveEditorWindow;
    import bh.platform.SaveCopy;
    import bh.platform.BigWindow;
@@ -543,7 +544,43 @@ package bh.mods.optionsscreen
          else if(tab == 1)
          {
             launchRows();
+            modSettingRows();
          }
+      }
+
+      private function modSettingRows() : void
+      {
+         var mine:Array = [];
+         for each(var mod:Object in ContentMods.all)
+         {
+            if(mod.setting != null)
+            {
+               mine.push(mod);
+            }
+         }
+         if(mine.length == 0)
+         {
+            return;
+         }
+         section(colY[0] <= colY[1] ? 0 : 1,"MODS");
+         for each(var m:Object in mine)
+         {
+            var on:Boolean = !ModSettings.isDisabled(m.id);
+            var later:Boolean = on != ContentMods.isLoaded(m.id);
+            colRow(String(m.setting.label).toUpperCase(),(on ? "On" : "Off") + (later ? " (next start)" : ""),
+               (m.setting.about != "" ? m.setting.about + " " : "") + "Changes apply the next time the game starts. " +
+               "This is the switch of the " + m.name + " mod in Mods.",modSettingChanger(m));
+         }
+         sectionEnd();
+      }
+
+      private function modSettingChanger(mod:Object) : Function
+      {
+         return function(dir:int):void
+         {
+            ModSettings.setDisabled(mod.id,!ModSettings.isDisabled(mod.id));
+            restartNote = String(mod.setting.label).toUpperCase() + " changes the next time the game starts.";
+         };
       }
 
       private function gameRow(r:Object) : void

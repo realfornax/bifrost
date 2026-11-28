@@ -4,8 +4,11 @@ package bh.platform
    import flash.filesystem.File;
    import flash.filesystem.FileMode;
    import flash.filesystem.FileStream;
+   import flash.utils.ByteArray;
    import flash.utils.Dictionary;
+   import flash.utils.Endian;
    import flash.utils.setTimeout;
+   import haxe.ds.StringMap;
 
    public final class ContentMods
    {
@@ -173,7 +176,7 @@ package bh.platform
          {
             return false;
          }
-         for each(var part:Object in [mod.tables,mod.strings,mod.assets,mod.animationAliases])
+         for each(var part:Object in [mod.tables,mod.strings,mod.assets,mod.animationAliases,mod.animations])
          {
             for(var any:String in part)
             {
@@ -1418,6 +1421,168 @@ package bh.platform
          return 0;
       }
 
+      private static var modAnimations:Array = null;
+
+      private static var animationFirst:Object = {};
+
+      private static var animationOwners:Object = {};
+
+      public static var animationState:Object = {};
+
+      private static function readAnimationFile(file:File) : ByteArray
+      {
+         var bytes:ByteArray = new ByteArray();
+         var stream:FileStream = new FileStream();
+         stream.open(file,FileMode.READ);
+         try
+         {
+            stream.endian = Endian.LITTLE_ENDIAN;
+            stream.readInt();
+            stream.readBytes(bytes);
+         }
+         finally
+         {
+            stream.close();
+         }
+         bytes.uncompress();
+         return bytes;
+      }
+
+      private static function loadModAnimations() : Array
+      {
+         if(modAnimations != null)
+         {
+            return modAnimations;
+         }
+         modAnimations = [];
+         for each(var mod:Object in mods)
+         {
+            for each(var path:String in mod.animations)
+            {
+               var file:File = (mod.dir as File).resolvePath(path);
+               if(!file.exists)
+               {
+                  report.push("animations " + path + " of " + mod.id + ": the file is missing");
+                  continue;
+               }
+               try
+               {
+                  var classes:StringMap = new StringMap();
+                  var anmBytes:ByteArray = readAnimationFile(file);
+                  if(mod.animationBones != null && mod.animationBones[path] != null)
+                  {
+                     BoneIds.remap(anmBytes,mod.animationBones[path],"animation bones " + path + " of " + mod.id,report);
+                  }
+                  class_13.method_2277(classes,anmBytes);
+                  var keys:Array = [];
+                  var count:int = 0;
+                  for(var key:String in classes.h)
+                  {
+                     keys.push(key);
+                     var def:Object = classes.h[key];
+                     for(var name:String in def.var_14598.h)
+                     {
+                        count++;
+                        var id:String = key + "/" + name;
+                        if(animationOwners[id] != null && animationOwners[id].mod != mod.id)
+                        {
+                           report.push("conflict animation " + id + ": " + animationOwners[id].mod + " is overridden by " + mod.id);
+                        }
+                        animationOwners[id] = {"mod":mod.id,"key":key,"name":name,"move":def.var_14598.h[name]};
+                     }
+                     if(animationFirst[key] == null)
+                     {
+                        animationFirst[key] = def;
+                     }
+                  }
+                  modAnimations.push({"mod":mod.id,"path":path,"classes":classes});
+                  report.push("animations " + path + " of " + mod.id + ": " + count + " animations in " + keys.length +
+                     " classes (" + keys.sort().join(", ") + ")");
+               }
+               catch(e:Error)
+               {
+                  report.push("animations " + path + " of " + mod.id + " failed: " + e.message);
+               }
+            }
+         }
+         return modAnimations;
+      }
+
+      private static function mergeModAnimations(classes:Object, setName:String) : void
+      {
+         if(loadModAnimations().length == 0)
+         {
+            return;
+         }
+         BoneIds.keep(report);
+         var replaced:Array = [];
+         var addedNames:Array = [];
+         var again:Array = [];
+         var newClasses:Array = [];
+         for(var id:String in animationOwners)
+         {
+            var owner:Object = animationOwners[id];
+            var game:Object = classes.h[owner.key];
+            if(game == null)
+            {
+               game = animationFirst[owner.key];
+               classes.h[owner.key] = game;
+               newClasses.push(owner.key);
+            }
+            var was:Object = game.var_14598.h[owner.name];
+            if(was === owner.move)
+            {
+               continue;
+            }
+            game.var_14598.h[owner.name] = owner.move;
+            var list:Object = game.var_11823;
+            var at:int = -1;
+            for(var i:int = 0; list != null && i < list.length; i++)
+            {
+               if(list[i] === was || (list[i] != null && list[i].var_13246 == owner.name))
+               {
+                  at = i;
+                  break;
+               }
+            }
+            if(list != null && at >= 0)
+            {
+               list[at] = owner.move;
+            }
+            else if(list != null)
+            {
+               list.push(owner.move);
+            }
+            if(animationState[id] != null)
+            {
+               again.push(id);
+            }
+            else if(was == null)
+            {
+               addedNames.push(id);
+            }
+            else
+            {
+               replaced.push(id);
+            }
+            animationState[id] = was == null ? "added" : "replaced";
+         }
+         if(newClasses.length > 0)
+         {
+            report.push("animations after load set " + setName + ": " + newClasses.length + " classes the game hasn't loaded " +
+               "(yet) come from mods (" + newClasses.sort().join(", ") + ")");
+            writeReport();
+         }
+         if(replaced.length + addedNames.length + again.length > 0)
+         {
+            report.push("animations after load set " + setName + ": " + replaced.length + " replaced" +
+               (replaced.length > 0 ? " (" + replaced.sort().join(", ") + ")" : "") + ", " + addedNames.length + " added" +
+               (addedNames.length > 0 ? " (" + addedNames.sort().join(", ") + ")" : "") +
+               (again.length > 0 ? ", " + again.length + " put back after the game reloaded their class" : ""));
+            writeReport();
+         }
+      }
+
       private static var filledAnimations:Object = {};
 
       private static function fillHeroAnimations(setName:String) : void
@@ -1428,6 +1593,7 @@ package bh.platform
          {
             return;
          }
+         mergeModAnimations(classes,setName);
          fillAnimationAliases(classes,setName);
          var filled:int = 0;
          for(var classKey:String in classes.h)
@@ -1933,8 +2099,48 @@ package bh.platform
             }
             sounds = data.sounds;
          }
+         var animationFiles:Array = [];
+         if(data.animations != null)
+         {
+            if(!(data.animations is Array))
+            {
+               report.push("skipped " + folder + ": \"animations\" is not a list");
+               return null;
+            }
+            for each(var anm:* in data.animations)
+            {
+               if(!(anm is String) || !FILE.test(anm) || String(anm).indexOf("..") >= 0 ||
+                  String(anm).substr(-4).toLowerCase() != ".anm")
+               {
+                  report.push("skipped " + folder + ": \"animations\" holds " + anm + ", not an .anm inside the mod folder");
+                  return null;
+               }
+               animationFiles.push(anm);
+            }
+         }
+         if(data.animationBones != null)
+         {
+            var bonesProblem:String = BoneIds.problem(data.animationBones,animationFiles);
+            if(bonesProblem != null)
+            {
+               report.push("skipped " + folder + ": " + bonesProblem);
+               return null;
+            }
+         }
+         var setting:Object = null;
+         if(data.setting != null)
+         {
+            if(typeof data.setting != "object" || data.setting is Array || !(data.setting.label is String) ||
+               data.setting.label == "" || (data.setting.about != null && !(data.setting.about is String)))
+            {
+               report.push("skipped " + folder + ": \"setting\" needs a \"label\" and an optional \"about\" text");
+               return null;
+            }
+            setting = {"label":String(data.setting.label),"about":data.setting.about is String ? data.setting.about : ""};
+         }
          return {"id":data.id,"name":data.name,"version":data.version,"requires":requires,"strings":strings,"tables":tables,
                  "files":files,"assets":assetMap,"palette":data.palette,"animationAliases":aliases,"soundBanks":banks,
+                 "animations":animationFiles,"animationBones":data.animationBones,"setting":setting,
                  "mapArt":mapArt,"music":music,"sounds":sounds,"description":data.description is String ? data.description : "",
                  "preview":data.preview is String && FILE.test(data.preview) && String(data.preview).indexOf("..") < 0 ?
                     data.preview : null,
